@@ -1362,16 +1362,29 @@ function New-BulkPRTToken
         # Make the first request to get flowToken
         $response = Invoke-RestMethod -UseBasicParsing -Method Post -Uri "https://login.microsoftonline.com/webapp/bulkaadjtoken/begin" -Headers $headers -Body ($body | ConvertTo-Json) -ContentType "application/json; charset=utf-8"
 
-        if($response.state -like "*Error*")
+        $beginFailed = $response.state -like "*Error*"
+        if(-not $beginFailed)
         {
-            $resultData = $response.resultData | ConvertFrom-Json
-            throw $resultData.error_description
+            # Get the BPRT
+            $response = Invoke-RestMethod -UseBasicParsing -Method Get -Uri "https://login.microsoftonline.com/webapp/bulkaadjtoken/poll?flowToken=$($response.flowToken)" -Headers $headers
         }
 
-        # Get the BPRT
-        $response = Invoke-RestMethod -UseBasicParsing -Method Get -Uri "https://login.microsoftonline.com/webapp/bulkaadjtoken/poll?flowToken=$($response.flowToken)" -Headers $headers
-
         $details = $response.resultData | ConvertFrom-Json
+
+        if($details.error_codes -contains 90093 -or $details.error_description -match '\bAADSTS90093\b')
+        {
+            Write-Warning "Microsoft Entra denied the bulk enrollment request. Review the Entra logs for this request and verify the requesting account's active role and Intune MDM user scope."
+            if([string]::IsNullOrEmpty($details.error_description))
+            {
+                throw "AADSTS90093: GraphUserUnauthorized"
+            }
+            throw $details.error_description
+        }
+
+        if($beginFailed)
+        {
+            throw $details.error_description
+        }
 
         # Check for the errors
         if($details.error_description)
